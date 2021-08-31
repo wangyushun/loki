@@ -21,6 +21,7 @@ import (
 	"github.com/grafana/loki/pkg/storage/chunk/cassandra"
 	"github.com/grafana/loki/pkg/storage/chunk/gcp"
 	"github.com/grafana/loki/pkg/storage/chunk/grpc"
+	"github.com/grafana/loki/pkg/storage/chunk/iharbor"
 	"github.com/grafana/loki/pkg/storage/chunk/local"
 	"github.com/grafana/loki/pkg/storage/chunk/objectclient"
 	"github.com/grafana/loki/pkg/storage/chunk/openstack"
@@ -50,6 +51,7 @@ const (
 	StorageTypeGrpc           = "grpc-store"
 	StorageTypeS3             = "s3"
 	StorageTypeSwift          = "swift"
+	StorageTypeIHarbor        = "iharbor"
 )
 
 type indexStoreFactories struct {
@@ -89,6 +91,7 @@ type Config struct {
 	BoltDBConfig           local.BoltDBConfig      `yaml:"boltdb"`
 	FSConfig               local.FSConfig          `yaml:"filesystem"`
 	Swift                  openstack.SwiftConfig   `yaml:"swift"`
+	IHarborConfig          iharbor.IHarborConfig   `yaml:"iharbor"`
 
 	IndexCacheValidity time.Duration `yaml:"index_cache_validity"`
 
@@ -112,6 +115,7 @@ func (cfg *Config) RegisterFlags(f *flag.FlagSet) {
 	cfg.DeleteStoreConfig.RegisterFlags(f)
 	cfg.Swift.RegisterFlags(f)
 	cfg.GrpcConfig.RegisterFlags(f)
+	cfg.IHarborConfig.RegisterFlags(f)
 
 	f.StringVar(&cfg.Engine, "store.engine", "chunks", "The storage engine to use: chunks or blocks.")
 	cfg.IndexQueriesCacheConfig.RegisterFlagsWithPrefix("store.index-cache-read.", "Cache config for index entry reading. ", f)
@@ -301,6 +305,8 @@ func NewChunkClient(name string, cfg Config, schemaCfg chunk.SchemaConfig, regis
 		return objectclient.NewClient(store, objectclient.Base64Encoder), nil
 	case StorageTypeGrpc:
 		return grpc.NewStorageClient(cfg.GrpcConfig, schemaCfg)
+	case StorageTypeIHarbor:
+		return newChunkClientFromStore(iharbor.NewIHarborObjectClient(context.Background(), cfg.IHarborConfig))
 	default:
 		return nil, fmt.Errorf("Unrecognized storage client %v, choose one of: %v, %v, %v, %v, %v, %v, %v, %v", name, StorageTypeAWS, StorageTypeAzure, StorageTypeCassandra, StorageTypeInMemory, StorageTypeGCP, StorageTypeBigTable, StorageTypeBigTableHashed, StorageTypeGrpc)
 	}
@@ -370,6 +376,9 @@ func NewObjectClient(name string, cfg Config) (chunk.ObjectClient, error) {
 		return chunk.NewMockStorage(), nil
 	case StorageTypeFileSystem:
 		return local.NewFSObjectClient(cfg.FSConfig)
+	case StorageTypeIHarbor:
+		return iharbor.NewIHarborObjectClient(context.Background(), cfg.IHarborConfig)
+
 	default:
 		return nil, fmt.Errorf("Unrecognized storage client %v, choose one of: %v, %v, %v, %v, %v", name, StorageTypeAWS, StorageTypeS3, StorageTypeGCS, StorageTypeAzure, StorageTypeFileSystem)
 	}
