@@ -20,6 +20,7 @@ import (
 	"github.com/grafana/loki/pkg/storage/chunk/gcp"
 	"github.com/grafana/loki/pkg/storage/chunk/grpc"
 	"github.com/grafana/loki/pkg/storage/chunk/hedging"
+	"github.com/grafana/loki/pkg/storage/chunk/iharbor"
 	"github.com/grafana/loki/pkg/storage/chunk/local"
 	"github.com/grafana/loki/pkg/storage/chunk/objectclient"
 	"github.com/grafana/loki/pkg/storage/chunk/openstack"
@@ -50,6 +51,7 @@ const (
 	StorageTypeGrpc           = "grpc-store"
 	StorageTypeS3             = "s3"
 	StorageTypeSwift          = "swift"
+	StorageTypeIHarbor        = "iharbor"
 )
 
 type indexStoreFactories struct {
@@ -99,7 +101,8 @@ type Config struct {
 
 	GrpcConfig grpc.Config `yaml:"grpc_store"`
 
-	Hedging hedging.Config `yaml:"hedging"`
+	Hedging       hedging.Config        `yaml:"hedging"`
+	IHarborConfig iharbor.IHarborConfig `yaml:"iharbor"`
 }
 
 type ClientMetrics struct {
@@ -134,6 +137,7 @@ func (cfg *Config) RegisterFlags(f *flag.FlagSet) {
 	f.DurationVar(&cfg.IndexCacheValidity, "store.index-cache-validity", 5*time.Minute, "Cache validity for active index entries. Should be no higher than -ingester.max-chunk-idle.")
 	f.BoolVar(&cfg.DisableBroadIndexQueries, "store.disable-broad-index-queries", false, "Disable broad index queries which results in reduced cache usage and faster query performance at the expense of somewhat higher QPS on the index store.")
 	f.IntVar(&cfg.MaxParallelGetChunk, "store.max-parallel-get-chunk", 150, "Maximum number of parallel chunk reads.")
+	cfg.IHarborConfig.RegisterFlags(f)
 }
 
 // Validate config and returns error on failure
@@ -286,6 +290,12 @@ func NewIndexClient(name string, cfg Config, schemaCfg chunk.SchemaConfig, limit
 // NewChunkClient makes a new chunk.Client of the desired types.
 func NewChunkClient(name string, cfg Config, schemaCfg chunk.SchemaConfig, clientMetrics ClientMetrics, registerer prometheus.Registerer) (chunk.Client, error) {
 	switch name {
+	case StorageTypeIHarbor:
+		c, err := iharbor.NewIHarborObjectClient(cfg.IHarborConfig)
+		if err != nil {
+			return nil, err
+		}
+		return objectclient.NewClientWithMaxParallel(c, nil, cfg.MaxParallelGetChunk, schemaCfg), nil
 	case StorageTypeInMemory:
 		return chunk.NewMockStorage(), nil
 	case StorageTypeAWS, StorageTypeS3:
@@ -336,7 +346,7 @@ func NewChunkClient(name string, cfg Config, schemaCfg chunk.SchemaConfig, clien
 	case StorageTypeGrpc:
 		return grpc.NewStorageClient(cfg.GrpcConfig, schemaCfg)
 	default:
-		return nil, fmt.Errorf("Unrecognized storage client %v, choose one of: %v, %v, %v, %v, %v, %v, %v, %v", name, StorageTypeAWS, StorageTypeAzure, StorageTypeCassandra, StorageTypeInMemory, StorageTypeGCP, StorageTypeBigTable, StorageTypeBigTableHashed, StorageTypeGrpc)
+		return nil, fmt.Errorf("Unrecognized storage client %v, choose one of: %v, %v, %v, %v, %v, %v, %v, %v, %v", name, StorageTypeAWS, StorageTypeAzure, StorageTypeCassandra, StorageTypeInMemory, StorageTypeGCP, StorageTypeBigTable, StorageTypeBigTableHashed, StorageTypeGrpc, StorageTypeIHarbor)
 	}
 }
 
@@ -385,6 +395,8 @@ func NewBucketClient(storageConfig Config) (chunk.BucketClient, error) {
 // NewObjectClient makes a new StorageClient of the desired types.
 func NewObjectClient(name string, cfg Config, clientMetrics ClientMetrics) (chunk.ObjectClient, error) {
 	switch name {
+	case StorageTypeIHarbor:
+		return iharbor.NewIHarborObjectClient(cfg.IHarborConfig)
 	case StorageTypeAWS, StorageTypeS3:
 		return aws.NewS3ObjectClient(cfg.AWSStorageConfig.S3Config, cfg.Hedging)
 	case StorageTypeGCS:

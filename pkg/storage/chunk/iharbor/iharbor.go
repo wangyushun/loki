@@ -62,7 +62,7 @@ type IHarborObjectClient struct {
 }
 
 // NewIHarborObjectClient returns a new IharborObjectClient using the provided IharborConfig values.
-func NewIHarborObjectClient(tx context.Context, config IHarborConfig) (*IHarborObjectClient, error) {
+func NewIHarborObjectClient(config IHarborConfig) (*IHarborObjectClient, error) {
 	if err := config.Validate(); err != nil {
 		return nil, errors.Wrap(err, "invalid iharbor Storage config")
 	}
@@ -116,27 +116,27 @@ func (b *IHarborObjectClient) Upload(ctx context.Context, objectKey string, obje
 	return nil
 }
 
-func (b *IHarborObjectClient) getRange(_ context.Context, objectKey string, off, length int64) (io.ReadCloser, error) {
+func (b *IHarborObjectClient) getRange(_ context.Context, objectKey string, off, length int64) (io.ReadCloser, int64, error) {
 
 	if len(objectKey) == 0 {
-		return nil, errors.New("given object key should not empty")
+		return nil, 0, errors.New("given object key should not empty")
 	}
 
-	resp, err := b.client.GetObject(b.name, objectKey, off, length)
+	resp, contentLength, err := b.client.GetObject(b.name, objectKey, off, length)
 	if err != nil {
 
-		return nil, err
+		return nil, 0, err
 	}
 
-	return resp, nil
+	return resp, contentLength, nil
 }
 
 // GetObject returns a reader for the given object name.
-func (b *IHarborObjectClient) GetObject(ctx context.Context, objectKey string) (io.ReadCloser, error) {
+func (b *IHarborObjectClient) GetObject(ctx context.Context, objectKey string) (io.ReadCloser, int64, error) {
 	return b.getRange(ctx, objectKey, 0, -1)
 }
 
-func (b *IHarborObjectClient) GetRange(ctx context.Context, objectKey string, off, length int64) (io.ReadCloser, error) {
+func (b *IHarborObjectClient) GetRange(ctx context.Context, objectKey string, off, length int64) (io.ReadCloser, int64, error) {
 	return b.getRange(ctx, objectKey, off, length)
 }
 

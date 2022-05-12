@@ -568,7 +568,7 @@ func (c *IHarborClient) DeleteObject(bucketName string, objPathName string) erro
 // GetObject
 // param offset: 对象指定偏移量读；<0忽略
 // param size: 读取字节长度；<=0读取到结尾，max 20MB
-func (c *IHarborClient) GetObject(bucketName string, objPathName string, offset int64, size int64) (io.ReadCloser, error) {
+func (c *IHarborClient) GetObject(bucketName string, objPathName string, offset int64, size int64) (io.ReadCloser, int64, error) {
 
 	path := buildPath([]string{"api/v1/obj", bucketName, objPathName})
 	path = path + "/"
@@ -586,21 +586,21 @@ func (c *IHarborClient) GetObject(bucketName string, objPathName string, offset 
 
 	request, err := http.NewRequest("GET", urlStr, nil)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	request.Header.Set("Content-Type", "application/json")
 	c.setAuthHeader(request)
 	resp, err := (&http.Client{}).Do(request)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if resp.StatusCode == 200 {
-		return resp.Body, nil
+		return resp.Body, resp.ContentLength, nil
 	}
 
 	defer resp.Body.Close()
 	response := buildResponse(resp)
-	return nil, wrapIHarborError(response, "get object failed,"+urlStr)
+	return nil, 0, wrapIHarborError(response, "get object failed,"+urlStr)
 }
 
 // ObjectAttributes 对象元数据
