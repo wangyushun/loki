@@ -21,6 +21,7 @@ import (
 	"github.com/grafana/loki/pkg/storage/chunk/client/gcp"
 	"github.com/grafana/loki/pkg/storage/chunk/client/grpc"
 	"github.com/grafana/loki/pkg/storage/chunk/client/hedging"
+	"github.com/grafana/loki/pkg/storage/chunk/client/iharbor"
 	"github.com/grafana/loki/pkg/storage/chunk/client/local"
 	"github.com/grafana/loki/pkg/storage/chunk/client/openstack"
 	"github.com/grafana/loki/pkg/storage/chunk/client/testutils"
@@ -67,6 +68,7 @@ type NamedStores struct {
 	GCS          map[string]gcp.GCSConfig             `yaml:"gcs"`
 	AlibabaCloud map[string]alibaba.OssConfig         `yaml:"alibabacloud"`
 	Swift        map[string]openstack.SwiftConfig     `yaml:"swift"`
+	IHarbor      map[string]iharbor.IHarborConfig     `yaml:"iharbor"`
 
 	// contains mapping from named store reference name to store type
 	storeType map[string]string `yaml:"-"`
@@ -138,6 +140,13 @@ func (ns *NamedStores) populateStoreType() error {
 		ns.storeType[name] = config.StorageTypeSwift
 	}
 
+	for name := range ns.IHarbor {
+		if err := checkForDuplicates(name); err != nil {
+			return err
+		}
+		ns.storeType[name] = config.StorageTypeIHarbor
+	}
+
 	return nil
 }
 
@@ -160,6 +169,12 @@ func (ns *NamedStores) validate() error {
 		}
 	}
 
+	for name, iharborCfg := range ns.IHarbor {
+		if err := iharborCfg.Validate(); err != nil {
+			return errors.Wrap(err, fmt.Sprintf("invalid IHarbor Storage config with name %s", name))
+		}
+	}
+
 	return ns.populateStoreType()
 }
 
@@ -177,6 +192,7 @@ type Config struct {
 	Swift                  openstack.SwiftConfig     `yaml:"swift"`
 	GrpcConfig             grpc.Config               `yaml:"grpc_store"`
 	Hedging                hedging.Config            `yaml:"hedging"`
+	IHarborConfig          iharbor.IHarborConfig     `yaml:"iharbor"`
 	NamedStores            NamedStores               `yaml:"named_stores"`
 
 	IndexCacheValidity time.Duration `yaml:"index_cache_validity"`
@@ -208,6 +224,7 @@ func (cfg *Config) RegisterFlags(f *flag.FlagSet) {
 	cfg.Swift.RegisterFlags(f)
 	cfg.GrpcConfig.RegisterFlags(f)
 	cfg.Hedging.RegisterFlagsWithPrefix("store.", f)
+	cfg.IHarborConfig.RegisterFlags(f)
 
 	cfg.IndexQueriesCacheConfig.RegisterFlagsWithPrefix("store.index-cache-read.", "", f)
 	f.DurationVar(&cfg.IndexCacheValidity, "store.index-cache-validity", 5*time.Minute, "Cache validity for active index entries. Should be no higher than -ingester.max-chunk-idle.")
@@ -228,6 +245,9 @@ func (cfg *Config) Validate() error {
 	}
 	if err := cfg.Swift.Validate(); err != nil {
 		return errors.Wrap(err, "invalid Swift Storage config")
+	}
+	if err := cfg.IHarborConfig.Validate(); err != nil {
+		return errors.Wrap(err, "invalid IHarbor Storage config")
 	}
 	if err := cfg.IndexQueriesCacheConfig.Validate(); err != nil {
 		return errors.Wrap(err, "invalid Index Queries Cache config")
@@ -319,6 +339,12 @@ func NewChunkClient(name string, cfg Config, schemaCfg config.SchemaConfig, clie
 	}
 
 	switch storeType {
+	case config.StorageTypeIHarbor:
+		c, err := NewObjectClient(name, cfg, clientMetrics)
+		if err != nil {
+			return nil, err
+		}
+		return client.NewClientWithMaxParallel(c, nil, cfg.MaxParallelGetChunk, schemaCfg), nil
 	case config.StorageTypeInMemory:
 		return testutils.NewMockStorage(), nil
 	case config.StorageTypeAWS, config.StorageTypeS3:
@@ -381,7 +407,7 @@ func NewChunkClient(name string, cfg Config, schemaCfg config.SchemaConfig, clie
 	case config.StorageTypeGrpc:
 		return grpc.NewStorageClient(cfg.GrpcConfig, schemaCfg)
 	default:
-		return nil, fmt.Errorf("Unrecognized storage client %v, choose one of: %v, %v, %v, %v, %v, %v, %v, %v", name, config.StorageTypeAWS, config.StorageTypeAzure, config.StorageTypeCassandra, config.StorageTypeInMemory, config.StorageTypeGCP, config.StorageTypeBigTable, config.StorageTypeBigTableHashed, config.StorageTypeGrpc)
+		return nil, fmt.Errorf("Unrecognized storage client %v, choose one of: %v, %v, %v, %v, %v, %v, %v, %v, %v", name, config.StorageTypeAWS, config.StorageTypeAzure, config.StorageTypeCassandra, config.StorageTypeInMemory, config.StorageTypeGCP, config.StorageTypeBigTable, config.StorageTypeBigTableHashed, config.StorageTypeGrpc, config.StorageTypeIHarbor)
 	}
 }
 
@@ -469,6 +495,16 @@ func NewObjectClient(name string, cfg Config, clientMetrics ClientMetrics) (clie
 	}
 
 	switch storeType {
+	case config.StorageTypeIHarbor:
+		iharborCfg := cfg.IHarborConfig
+		if namedStore != "" {
+			var ok bool
+			iharborCfg, ok = cfg.NamedStores.IHarbor[namedStore]
+			if !ok {
+				return nil, fmt.Errorf("Unrecognized named IHabror object storage config %s", name)
+			}
+		}
+		return iharbor.NewIHarborObjectClient(iharborCfg)
 	case config.StorageTypeAWS, config.StorageTypeS3:
 		s3Cfg := cfg.AWSStorageConfig.S3Config
 		if namedStore != "" {
@@ -549,6 +585,6 @@ func NewObjectClient(name string, cfg Config, clientMetrics ClientMetrics) (clie
 
 		return baidubce.NewBOSObjectStorage(&bosCfg)
 	default:
-		return nil, fmt.Errorf("Unrecognized storage client %v, choose one of: %v, %v, %v, %v, %v", name, config.StorageTypeAWS, config.StorageTypeS3, config.StorageTypeGCS, config.StorageTypeAzure, config.StorageTypeFileSystem)
+		return nil, fmt.Errorf("Unrecognized storage client %v, choose one of: %v, %v, %v, %v, %v, %v", name, config.StorageTypeAWS, config.StorageTypeS3, config.StorageTypeGCS, config.StorageTypeAzure, config.StorageTypeFileSystem, config.StorageTypeIHarbor)
 	}
 }
